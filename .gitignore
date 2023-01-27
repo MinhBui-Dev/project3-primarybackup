@@ -34,3 +34,5 @@ Desktop.ini
 
 # Gradle
 .gradle/
+# submission check
+submission_check.txt
