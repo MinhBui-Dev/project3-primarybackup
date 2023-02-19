@@ -4,6 +4,8 @@ import dslabs.framework.Application;
 import dslabs.framework.Command;
 import dslabs.framework.Result;
 import java.lang.reflect.InvocationTargetException;
+import java.util.HashMap;
+import java.util.Map;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NonNull;
@@ -18,6 +20,8 @@ public final class AMOApplication<T extends Application>
     @Getter @NonNull private final T application;
 
     //TODO: declare fields for your implementation
+    private Map<String, Integer> clientSequenceNumber = new HashMap<>();
+    private final Map<String, Result> clientResult = new HashMap<>();
 
     @Override
     public AMOResult execute(Command command) {
@@ -29,7 +33,14 @@ public final class AMOApplication<T extends Application>
 
         //TODO: execute the command
         //Hints: remember to check whether the command is executed before and update records
-        return null;
+        if (alreadyExecuted(amoCommand)) {
+            return new AMOResult(clientResult.get(amoCommand.clientAddress()),amoCommand.sequenceNumber());
+        } else {
+            Result result = application.execute(amoCommand.command());
+            clientSequenceNumber.put(amoCommand.clientAddress(), amoCommand.sequenceNumber());
+            clientResult.put(amoCommand.clientAddress(), result);
+            return new AMOResult(result, amoCommand.sequenceNumber());
+        }
     }
 
     // copy constructor
@@ -39,6 +50,11 @@ public final class AMOApplication<T extends Application>
         this.application = (T) application.getClass().getConstructor(application.getClass()).newInstance(application);
         //TODO: a deepcopy constructor
         //Hints: remember to deepcopy all fields, especially the mutable ones
+
+        this.clientSequenceNumber = new HashMap<>(amoApplication.clientSequenceNumber);
+        for (Map.Entry<String, Result> entry : amoApplication.clientResult.entrySet()) {
+            this.clientResult.put(entry.getKey(), entry.getValue());
+        }
     }
 
     public Result executeReadOnly(Command command) {
@@ -59,8 +75,14 @@ public final class AMOApplication<T extends Application>
         }
 
         AMOCommand amoCommand = (AMOCommand) command;
-        
+
         //TODO: check whether the amoCommand is already executed or not
+
+        if (clientSequenceNumber.containsKey(amoCommand.clientAddress())) {
+            if (clientSequenceNumber.get(amoCommand.clientAddress()) >= amoCommand.sequenceNumber()) {
+                return true;
+            }
+        }
         return false;
     }
 }

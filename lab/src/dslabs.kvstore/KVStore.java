@@ -3,6 +3,8 @@ package dslabs.kvstore;
 import dslabs.framework.Application;
 import dslabs.framework.Command;
 import dslabs.framework.Result;
+import java.util.HashMap;
+import java.util.Map;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NonNull;
@@ -62,6 +64,7 @@ public class KVStore implements Application {
     }
 
     //TODO: declare fields for your implementation
+    private final Map<String, String> kvstore = new HashMap<>();
 
     public KVStore() {}
 
@@ -69,6 +72,7 @@ public class KVStore implements Application {
     public KVStore(KVStore application){
         //TODO: a deepcopy constructor
         //Hints: remember to deepcopy all fields, especially the mutable ones
+        this.kvstore.putAll(application.kvstore);
     }
 
     @Override
@@ -76,16 +80,29 @@ public class KVStore implements Application {
         if (command instanceof Get) {
             Get g = (Get) command;
             //TODO: get the value
+            if (kvstore.containsKey(g.key())) {
+                return new GetResult(kvstore.get(g.key()));
+            } else {
+                return new KeyNotFound();
+            }
         }
 
         if (command instanceof Put) {
             Put p = (Put) command;
             //TODO: put the value
+            kvstore.put(p.key(), p.value());
+            return new PutOk();
         }
 
         if (command instanceof Append) {
             Append a = (Append) command;
             //TODO: append after previous
+            if (kvstore.containsKey(a.key())) {
+                kvstore.put(a.key(), kvstore.get(a.key()) + a.value());
+            } else {
+                kvstore.put(a.key(), a.value());
+            }
+            return new AppendResult(kvstore.get(a.key()));
         }
 
         throw new IllegalArgumentException();
