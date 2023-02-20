@@ -1,6 +1,11 @@
 package dslabs.primarybackup;
 
+import dslabs.atmostonce.AMOApplication;
+import dslabs.atmostonce.AMOCommand;
+import dslabs.atmostonce.AMOResult;
 import dslabs.framework.Message;
+import dslabs.kvstore.KVStore;
+import dslabs.primarybackup.PBServer.PBResult;
 import lombok.Data;
 
 /* -------------------------------------------------------------------------
@@ -26,31 +31,40 @@ class ViewReply implements Message {
 @Data
 class Request implements Message {
     // TODO: client request ...
+    private final View view;
+    private final AMOCommand amoCommand;
 }
 
 @Data
 class Reply implements Message {
     //TODO: server response ...
+    private final AMOResult amoResult;
 }
 
 @Data
 class BackupRequest implements Message {
     // TODO: primary send backup request to backup ...
+    private final View view;
+    private final AMOCommand amoCommand;
 }
 
 @Data
 class BackupReply implements Message {
     // TODO: backup send reply to primary ...
+    private PBResult result;
 }
 
 @Data
 class SyncRequest implements Message {
     // TODO: primary sync up with backup ...
+    private final View view;
+    private final AMOApplication<AMOApplication<KVStore>> amoApplication;
 }
 
 @Data
 class SyncReply implements Message {
     // TODO: backup send reply to primary ...
+    private PBResult result;
 }
 
 // TODO: add more messages here ...

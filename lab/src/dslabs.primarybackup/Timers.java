@@ -21,3 +21,12 @@ final class ClientTimer implements Timer {
 }
 
 // TODO: add more timers here ...
+@Data
+final class SyncTimer implements Timer {
+    static final int SYNC_MILLIS = 100;
+}
+
+@Data
+final class BackupTimer implements Timer {
+    static final int BACKUP_MILLIS = 50;
+}
