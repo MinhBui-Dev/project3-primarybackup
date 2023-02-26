@@ -1,5 +1,6 @@
 package dslabs.atmostonce;
 
+import dslabs.framework.Address;
 import dslabs.framework.Command;
 import lombok.Data;
 
@@ -9,5 +10,5 @@ public final class AMOCommand implements Command {
     //Hints: think carefully about what information is required for server to check duplication
     private final Command command;
     private final int sequenceNumber;
-    private final String clientAddress;
+    private final Address clientAddress;
 }

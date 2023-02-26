@@ -5,6 +5,7 @@ import dslabs.framework.Node;
 import static dslabs.primarybackup.PingCheckTimer.PING_CHECK_MILLIS;
 
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import lombok.EqualsAndHashCode;
@@ -19,14 +20,13 @@ class ViewServer extends Node {
     private static final int INITIAL_VIEWNUM = 1;
 
     // TODO: declare fields for your implementation ...
-    private int currentViewNum, nextViewNum;
     private Address primary, backup, previousPrimary;
-
-    private View currentView, nextView;
-    private final HashMap<Address, Integer> pingServers = new HashMap<>();    // HashMap to keep track of active ping servers
-    private final HashMap<Address, Integer> serverViewNum = new HashMap<>();    // HashMap to keep track of current view number for each server
+    private View currentView, nextView, previousView;
+    private final ArrayList<Address> servers = new ArrayList<>();    //keep track of ping servers
+    private final ArrayList<Integer> serverViewNums = new ArrayList<>(); //keep track of view numbers
+    private final ArrayList<Integer> pingCheck = new ArrayList<>(); //keep track of ping check
     private final HashSet<Address> aliveServers = new HashSet<>();    // HashSet to keep track of all alive servers
-    private boolean primaryAck;
+    private boolean primaryAck, needNewView, handleViewRequest;
     /* -------------------------------------------------------------------------
         Construction and Initialization
        -----------------------------------------------------------------------*/
@@ -38,12 +38,12 @@ class ViewServer extends Node {
     public void init() {
         set(new PingCheckTimer(), PING_CHECK_MILLIS);
         // TODO: initialize fields ...
-        currentViewNum = STARTUP_VIEWNUM;
-        nextViewNum = currentViewNum;
         primary = null;
         backup = null;
-        currentView = new View(currentViewNum, primary, backup);
+        currentView = new View(STARTUP_VIEWNUM, null, null);
+        primaryAck = true;
         nextView = null;
+        handleViewRequest = false;
     }
 
     /* -------------------------------------------------------------------------
@@ -51,61 +51,57 @@ class ViewServer extends Node {
        -----------------------------------------------------------------------*/
     private void handlePing(Ping m, Address sender) {
         // TODO: handle server ping, filtering outdated ping ...
-        // if view number in message is less than current view number, ignore
-        if (serverViewNum.containsKey(sender)) {
-            // if view number in message is less than current view number, ignore
-            if (m.viewNum() < serverViewNum.get(sender)) {
+        if (servers.contains(sender)) {
+            // filtering outdated ping
+            int index = servers.indexOf(sender);
+            if (m.viewNum() < serverViewNums.get(index)) {
                 return;
             }
             // update the number of pings received from the server
-            pingServers.put(sender, pingServers.get(sender) + 1);
-            // update the view number of the server
-            serverViewNum.put(sender, m.viewNum());
+            pingCheck.set(index, 1);
+            serverViewNums.set(index, m.viewNum());
         } else {
             // add the server to pingServers and serverViewNum hashmaps
-            serverViewNum.put(sender, m.viewNum());
-            pingServers.put(sender, 1);
+            servers.add(sender);
+            serverViewNums.add(m.viewNum());
+            pingCheck.add(1);
         }
 
         if (primary == null) {
             primary = sender;
-            currentViewNum = INITIAL_VIEWNUM;
-            currentView = new View(INITIAL_VIEWNUM, primary, backup);
+            currentView = new View(INITIAL_VIEWNUM, primary, null);
             primaryAck = false;
-            send(new ViewReply(currentView), sender);
-        } else if (backup == null && !sender.equals(primary)) {
+        } else if (backup == null && !sender.equals(primary) && nextView == null) {
             backup = sender;
-            nextViewNum = currentViewNum + 1;
-            nextView = new View(nextViewNum, primary, backup);
+            nextView = new View(currentView.viewNum() + 1, primary, backup);
+        }
 
-            if (primaryAck) {
+
+        if (primary.equals(sender)) {
+            if (m.viewNum() < currentView.viewNum()) {
+                send(new ViewReply(currentView), sender);
+            } else if (m.viewNum() == currentView.viewNum() && nextView != null) {
                 currentView = nextView;
-                currentViewNum = nextViewNum;
-                nextView = null;
                 primaryAck = false;
+                nextView = null;
+                send(new ViewReply(currentView), sender);
+                send(new ViewReply(currentView), currentView.backup());
+            } else {
+                primaryAck = true;
+                send(new ViewReply(currentView), sender);
+            }
+        } else if (backup != null && backup.equals(sender))  {
+            if (primaryAck && nextView != null) {
+                currentView = nextView;
+                primaryAck = false;
+                nextView = null;
+                send(new ViewReply(currentView), currentView.primary());
             }
             send(new ViewReply(currentView), sender);
         } else {
-            // Case where sender is primary:
-            if (sender.equals(primary)) {
-                if (m.viewNum() < currentViewNum) {
-                    send(new ViewReply(currentView), sender); // if the server view is less than current view, send current view
-                } else if (m.viewNum() == currentViewNum && nextView == null) {
-                    // if the server view is equal to current view and next view is null, send current view and set primaryAck to true
-                    primaryAck = true;
-                    send(new ViewReply(currentView), sender);
-                } else {
-                    // if the server view is equal to current view and next view is not null, send next view and set primaryAck to false
-                    currentViewNum = nextViewNum;
-                    currentView = nextView;
-                    nextView = null;
-                    primaryAck = false;
-                    send(new ViewReply(currentView), sender);
-                }
-            } else {
-                send(new ViewReply(currentView), sender);
-            }
+            //send(new ViewReply(currentView), sender);
         }
+
         //System.out.println("Current View: " + currentView);
         //System.out.println("Ack: " + primaryAck);
         //System.out.println("Next View: " + nextView);
@@ -114,7 +110,6 @@ class ViewServer extends Node {
     private void handleGetView(GetView m, Address sender) {
         // TODO: return current view to sender ...
         send(new ViewReply(currentView), sender);
-        //System.out.println("Current View: " + currentView);
     }
 
     /* -------------------------------------------------------------------------
@@ -122,9 +117,27 @@ class ViewServer extends Node {
        -----------------------------------------------------------------------*/
     private void onPingCheckTimer(PingCheckTimer t) {
         // TODO: check server liveness on ping check ...
+        // No server pings, reset timer
+        if (servers.isEmpty()) {
+            set(t, PING_CHECK_MILLIS);
+            return;
+        }
+        for (int i = 0; i < servers.size(); i++) {
+            if (pingCheck.get(i) == 0) {
+                if (aliveServers.contains(servers.get(i))) {
+                    aliveServers.remove(servers.get(i));
+                }
+            }else {
+                if (!aliveServers.contains(servers.get(i))) {
+                    aliveServers.add(servers.get(i));
+                }
+            }
+            pingCheck.set(i, 0);
+        }
         // if the number of pings received from previous ping checks is 0, the server is dead
-        for (Address server : pingServers.keySet()) {
+        /*for (Address server : pingServers.keySet()) {
             int totalPings = pingServers.get(server);
+            //System.out.println("Server: " + server + " with current and previous pings: " + totalPings);
             if (aliveServers.contains(server)) {
                 if (totalPings == 0) {
                     aliveServers.remove(server);
@@ -134,48 +147,58 @@ class ViewServer extends Node {
                     aliveServers.add(server);
                 }
             }
-            //System.out.println("Server: " + server + " with current and previous pings: " + totalPings);
             pingServers.put(server, 0);
-
-        }
+        }*/
 
         Address[] servers =
                 aliveServers.toArray(new Address[aliveServers.size()]);
 
-        if (primary != null && !aliveServers.contains(primary) && primaryAck) {
-            previousPrimary = primary;
-            primary = backup;
-            if (servers.length > 1) {
-                if (servers[0].equals(primary)) {
-                    backup = servers[1];
-                } else {
-                    backup = servers[0];
-                }
-            } else {
-                backup = null;
-            }
-        } else if (backup != null && !aliveServers.contains(backup)) {
-            if (servers.length > 1) {
-                if (aliveServers.contains(previousPrimary)) {
-                    backup = previousPrimary;
-                } else {
+        if (servers.length == 0) {
+            set(t, PING_CHECK_MILLIS);
+            return;
+        }
+
+        needNewView = false;
+
+        if (primaryAck) {
+            if (primary != null && !aliveServers.contains(primary)) {
+                previousPrimary = primary;
+                primary = backup;
+                needNewView = true;
+                if (servers.length > 1) {
                     if (servers[0].equals(primary)) {
                         backup = servers[1];
                     } else {
                         backup = servers[0];
                     }
+                } else {
+                    backup = null;
                 }
-            } else {
-                backup = null;
+            } else if (backup != null && !aliveServers.contains(backup)) {
+                needNewView = true;
+                if (servers.length > 1) {
+                    if (aliveServers.contains(previousPrimary)) {
+                        backup = previousPrimary;
+                    } else {
+                        if (servers[0].equals(primary)) {
+                            backup = servers[1];
+                        } else {
+                            backup = servers[0];
+                        }
+                    }
+                } else {
+                    backup = null;
+                }
             }
         }
 
-        if (!primary.equals(currentView.primary()) || backup == null ||
-                !backup.equals(currentView.backup())) {
-            currentViewNum = currentViewNum + 1;
-            currentView = new View(currentViewNum, primary, backup);
+        if (needNewView) {
+            currentView = new View((currentView.viewNum()+1), primary, backup);
             primaryAck = false;
-            nextView = null;
+            send(new ViewReply(currentView), primary);
+            if (backup != null) {
+                send(new ViewReply(currentView), backup);
+            }
         }
         //System.out.println("Current View: " + currentView);
         set(t, PING_CHECK_MILLIS);

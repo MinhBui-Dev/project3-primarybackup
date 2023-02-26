@@ -1,5 +1,8 @@
 package dslabs.primarybackup;
 
+import dslabs.atmostonce.AMOCommand;
+import dslabs.framework.Address;
+import dslabs.framework.Command;
 import dslabs.framework.Timer;
 import lombok.Data;
 
@@ -16,6 +19,8 @@ final class PingTimer implements Timer {
 @Data
 final class ClientTimer implements Timer {
     static final int CLIENT_RETRY_MILLIS = 100;
+    private final Command command;
+    private final int sequenceNumber;
 
     // TODO: add fields for client request
 }
@@ -24,9 +29,16 @@ final class ClientTimer implements Timer {
 @Data
 final class SyncTimer implements Timer {
     static final int SYNC_MILLIS = 100;
+    private final Address backup;
 }
 
 @Data
 final class BackupTimer implements Timer {
     static final int BACKUP_MILLIS = 50;
+    private final AMOCommand command;
+}
+
+@Data final class ViewTimer implements Timer {
+    static final int VIEW_MILLIS = 50;
+    private final int viewNum;
 }
