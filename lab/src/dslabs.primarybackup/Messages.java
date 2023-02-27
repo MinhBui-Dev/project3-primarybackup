@@ -68,7 +68,6 @@ class SyncRequest implements Message {
 class SyncReply implements Message {
     // TODO: backup send reply to primary ...
     private final int viewNum;
-    private final PBResult result;
 }
 
 // TODO: add more messages here ...
@@ -87,12 +86,10 @@ class InvalidReply implements Message{
 class RelayRequest implements Message {
     private final int viewNum;
     private final AMOCommand amoCommand;
-    private final Address client;
 }
 
 @Data
 class RelayReply implements Message {
     private final int viewNum;
     private final AMOCommand amoCommand;
-    private final Address client;
 }

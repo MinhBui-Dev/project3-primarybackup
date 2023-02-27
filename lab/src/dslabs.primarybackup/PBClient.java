@@ -15,7 +15,6 @@ import lombok.extern.java.Log;
 
 import static dslabs.primarybackup.ViewServer.STARTUP_VIEWNUM;
 import static dslabs.primarybackup.ClientTimer.CLIENT_RETRY_MILLIS;
-import static dslabs.primarybackup.ViewTimer.VIEW_MILLIS;
 
 @Log
 @ToString(callSuper = true)
@@ -45,7 +44,7 @@ class PBClient extends Node implements Client {
         gettingNewView = true;
         send(new GetView(), viewServer);
         currentView = new View(STARTUP_VIEWNUM, null, null);
-        set(new ViewTimer(currentView.viewNum()), VIEW_MILLIS);
+        set(new ClientTimer(null), CLIENT_RETRY_MILLIS);
     }
 
     /* -------------------------------------------------------------------------
@@ -58,15 +57,12 @@ class PBClient extends Node implements Client {
         AMOCommand c = new AMOCommand(command, sequenceNumber,
                 this.address());
 
-        AMOCommand cprime = new AMOCommand(command, sequenceNumber+1,
-                this.address());
-
         this.command = c;
         this.result = null;
         if (currentView.primary() != null) {
             retryCount = 0;
             this.send(new Request(currentView,c), currentView.primary());
-            this.set(new ClientTimer(c, sequenceNumber), CLIENT_RETRY_MILLIS);
+            this.set(new ClientTimer(c), CLIENT_RETRY_MILLIS);
         }
     }
 
@@ -97,7 +93,7 @@ class PBClient extends Node implements Client {
             if (m.view().viewNum() > currentView.viewNum()) {
                 gettingNewView = true;
                 send(new GetView(), viewServer);
-                set(new ViewTimer(currentView.viewNum()), VIEW_MILLIS);
+                set(new ClientTimer(null), CLIENT_RETRY_MILLIS);
             }
         }
     }
@@ -111,14 +107,14 @@ class PBClient extends Node implements Client {
                 if (command != null && currentView.primary() != null) {
                     retryCount = 0;
                     send(new Request(currentView, command), currentView.primary());
-                    this.set(new ClientTimer(command, sequenceNumber),
+                    this.set(new ClientTimer(command),
                             CLIENT_RETRY_MILLIS);
                 }
             } else if (m.view().viewNum() == currentView.viewNum() && currentView.backup() != null) {
                 gettingNewView = false;
                 if (command != null) {
                     send(new Request(currentView, command), currentView.backup());
-                    this.set(new ClientTimer(command, sequenceNumber),
+                    this.set(new ClientTimer(command),
                             CLIENT_RETRY_MILLIS);
                 }
             }
@@ -131,7 +127,7 @@ class PBClient extends Node implements Client {
             if (currentView.viewNum() < ((InvalidView) result).view().viewNum() && !gettingNewView) {
                 gettingNewView = true;
                 send(new GetView(), viewServer);
-                set(new ViewTimer(currentView.viewNum()), VIEW_MILLIS);
+                set(new ClientTimer(command), CLIENT_RETRY_MILLIS);
             }
         }
     }
@@ -142,10 +138,10 @@ class PBClient extends Node implements Client {
        -----------------------------------------------------------------------*/
     private synchronized void onClientTimer(ClientTimer t) {
         // TODO: handle client request timeout ...
-        if (command != null && t.sequenceNumber() == sequenceNumber && !gettingNewView) {
-            if (retryCount > 10) {
+        if (command != null && command.equals(t.command())&& !gettingNewView) {
+            if (retryCount > 9) {
                 send(new GetView(), viewServer);
-                set(new ViewTimer(currentView.viewNum()), CLIENT_RETRY_MILLIS);
+                this.set(t, CLIENT_RETRY_MILLIS);
                 gettingNewView = true;
                 retryCount = 0;
             } else {
@@ -153,16 +149,17 @@ class PBClient extends Node implements Client {
                 this.set(t, CLIENT_RETRY_MILLIS);
                 retryCount++;
             }
-        } else {
-            //System.out.println("Timer no longer needed");
+        }else if (gettingNewView) {
+            send(new GetView(), viewServer);
+            this.set(t, CLIENT_RETRY_MILLIS);
         }
     }
 
-    private synchronized void onViewTimer(ViewTimer t) {
-        if (t.viewNum() == currentView.viewNum() && gettingNewView) {
+    /*private synchronized void onViewTimer(ViewTimer t) {
+        if (gettingNewView) {
             send(new GetView(), viewServer);
             set(t, VIEW_MILLIS);
         }
-    }
+    }*/
 
 }

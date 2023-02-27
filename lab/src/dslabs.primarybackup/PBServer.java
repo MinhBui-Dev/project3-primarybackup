@@ -15,6 +15,7 @@ import lombok.ToString;
 import lombok.Data;
 import lombok.NonNull;
 import lombok.extern.java.Log;
+import sun.security.krb5.internal.ReplayCache;
 
 import static dslabs.primarybackup.BackupTimer.BACKUP_MILLIS;
 import static dslabs.primarybackup.SyncTimer.SYNC_MILLIS;
@@ -47,9 +48,8 @@ class PBServer extends Node {
     private AMOApplication<KVStore> amoApplication;
     private boolean isPrimary, isBackup, isSyncing, isSynced, waitingOnBackup;
     private View currentView;
-    private Address relayClient;
     private AMOCommand currentCommand, relayCommand;
-    private int oldViewNum;
+    private int oldViewNum, backupReTry;
     private Queue<AMOCommand> commandQueue;
 
 
@@ -70,6 +70,7 @@ class PBServer extends Node {
         // TODO: initialize fields ...
         currentView = new View(STARTUP_VIEWNUM, null, null);
         currentCommand = null;
+        relayCommand = null;
         send(new Ping(STARTUP_VIEWNUM), viewServer);
         set(new PingTimer(), PING_MILLIS);
         commandQueue = new LinkedList<>();
@@ -80,7 +81,7 @@ class PBServer extends Node {
        -----------------------------------------------------------------------*/
     private void handleRequest(Request m, Address sender) {
         // TODO: handle client request ...
-        if (isPrimary && m.view().viewNum() <= currentView.viewNum()) {
+        if (isPrimary && m.view().viewNum() == currentView.viewNum()) {
             if (isSyncing || waitingOnBackup) {
                 if (!commandQueue.contains(m.amoCommand())){
                     commandQueue.add(m.amoCommand());
@@ -106,31 +107,36 @@ class PBServer extends Node {
                 send(new Reply(currentView, result), sender);
             }
         } else if (isBackup && m.view().viewNum() == currentView.viewNum()) {
-            relayClient = sender;
-            relayCommand = m.amoCommand();
-            send(new RelayRequest(currentView.viewNum(), m.amoCommand(),
-                    sender), currentView.primary());
-        } else {
+            if (relayCommand == null || relayCommand.equals(m.amoCommand())) {
+                relayCommand = m.amoCommand();
+                send(new RelayRequest(currentView.viewNum(), m.amoCommand()), currentView.primary());
+            }
+        } /*else {
             InvalidView invalidView = new InvalidView(currentView);
             send(new InvalidReply(invalidView), sender);
-        }
+        }*/
     }
 
     private void handleRelayRequest(RelayRequest m, Address sender){
         if (isPrimary && m.viewNum() == currentView.viewNum()) {
             if (currentCommand != null) {
                 relayCommand = m.amoCommand();
-                relayClient = m.client();
                 return;
             }
-            AMOResult result = amoApplication.execute(m.amoCommand());
-            send(new RelayReply(currentView.viewNum(),m.amoCommand(),m.client()),sender);
+            amoApplication.execute(m.amoCommand());
+            send(new RelayReply(currentView.viewNum(),m.amoCommand()),sender);
         }
     }
     private void handleRelayReply(RelayReply m, Address sender) {
-        if (m.viewNum() == currentView.viewNum()) {
-            AMOResult result = amoApplication.execute(m.amoCommand());
-            send(new Reply(currentView,result), m.client());
+        if (m.viewNum() == currentView.viewNum()){
+            if ( relayCommand != null && relayCommand.equals(m.amoCommand())) {
+                if (currentCommand != null) {
+                    amoApplication.execute(currentCommand);
+                }
+                AMOResult result = amoApplication.execute(relayCommand);
+                send(new Reply(currentView, result), relayCommand.clientAddress());
+                relayCommand = null;
+            }
         }
     }
 
@@ -179,19 +185,14 @@ class PBServer extends Node {
 
     private void handleBackupRequest(BackupRequest m, Address sender) {
         // TODO: handle backup request from primary ...
-        //if (isBackup) {
-            if (m.viewNum() == currentView.viewNum()) {
-                if (relayCommand != null) {
-                    return;
-                }
-                AMOCommand command = m.amoCommand();
-                amoApplication.execute(command);
-                send(new BackupReply(currentView.viewNum(),command), sender);
-            } /*else {
-                PBResult backupResult = new InvalidView(m.view());
-                send(new BackupReply(backupResult,m.amoCommand(),currentView.viewNum()), sender);
-            }*/
-        //}
+        if (m.viewNum() == currentView.viewNum()) {
+            if (relayCommand != null) {
+                currentCommand = m.amoCommand();
+                send(new BackupReply(currentView.viewNum(), currentCommand), sender);
+            }
+            amoApplication.execute(m.amoCommand());
+            send(new BackupReply(currentView.viewNum(), m.amoCommand()), sender);
+        }
     }
 
     private void handleBackupReply(BackupReply m, Address sender) {
@@ -216,6 +217,11 @@ class PBServer extends Node {
         if(m.viewNum() == currentView.viewNum() &&currentCommand != null && currentCommand.equals(m.command()) && waitingOnBackup){
             AMOResult result = amoApplication.execute(currentCommand);
             send(new Reply(currentView, result), currentCommand.clientAddress());
+            if (relayCommand != null) {
+                amoApplication.execute(relayCommand);
+                send(new RelayReply(currentView.viewNum(),relayCommand),sender);
+                relayCommand = null;
+            }
 
             if (commandQueue.size() > 0) {
                 currentCommand = commandQueue.remove();
@@ -228,12 +234,6 @@ class PBServer extends Node {
                     send(new Reply(currentView, result), currentCommand.clientAddress());
                 }
             } else {
-                if (relayCommand != null) {
-                    amoApplication.execute(relayCommand);
-                    send(new RelayReply(currentView.viewNum(),relayCommand,relayClient),sender);
-                    relayCommand = null;
-                    relayClient = null;
-                }
                 currentCommand = null;
                 waitingOnBackup = false;
             }
@@ -242,22 +242,18 @@ class PBServer extends Node {
 
     private void handleSyncRequest(SyncRequest m, Address sender) {
         // TODO: handle application state sync request from primary ...
-        // Hint: check if already performing a sync or not
-        //System.out.println("Sync request received from " + sender+ " at " + this.address()+ " with view " + m.view());
-        //System.out.println("Current view is " + currentView+ " and Syncing is " + isSynced);
-        if (m.view().viewNum() > currentView.viewNum() || (m.view().viewNum() == currentView.viewNum() && !isSynced)) {
-            this.amoApplication = m.amoApplication().application();
-            currentCommand = null;
-            commandQueue.clear();
-            currentView = m.view();
-            isSynced = true;
-            isBackup = true;
-            isPrimary = false;
-            PBResult syncResult = new SyncSuccess();
-            send(new SyncReply(m.view().viewNum(),syncResult), sender);
-        } else if (m.view().viewNum() == currentView.viewNum() && isSynced) {
-            PBResult syncResult = new SyncSuccess();
-            send(new SyncReply(m.view().viewNum(),syncResult), sender);
+        if (m.view().viewNum() == currentView.viewNum()) {
+            if (!isSynced) {
+                this.amoApplication = m.amoApplication().application();
+                currentCommand = null;
+                commandQueue.clear();
+                isSynced = true;
+                isBackup = true;
+                isPrimary = false;
+                send(new SyncReply(m.view().viewNum()), sender);
+            } else  {
+                send(new SyncReply(m.view().viewNum()), sender);
+            }
         }
     }
 
@@ -303,9 +299,17 @@ class PBServer extends Node {
             return;
         }
         if (currentCommand != null && currentCommand.equals(t.command()) && waitingOnBackup) {
-            send(new BackupRequest(currentView.viewNum(), currentCommand),
-                    currentView.backup());
-            set(t, BACKUP_MILLIS);
+            if (backupReTry < 3) {
+                backupReTry++;
+                send(new BackupRequest(currentView.viewNum(), currentCommand),
+                        currentView.backup());
+                set(t, BACKUP_MILLIS);
+            } else {
+                backupReTry = 0;
+                send(new Ping(currentView.viewNum()), viewServer);
+                set(t, PING_MILLIS);
+            }
+
         }
     }
 
