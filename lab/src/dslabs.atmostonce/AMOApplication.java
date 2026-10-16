@@ -1,5 +1,6 @@
 package dslabs.atmostonce;
 
+import dslabs.framework.Address;
 import dslabs.framework.Application;
 import dslabs.framework.Command;
 import dslabs.framework.Result;
@@ -20,8 +21,8 @@ public final class AMOApplication<T extends Application>
     @Getter @NonNull private final T application;
 
     //TODO: declare fields for your implementation
-    private Map<String, Integer> clientSequenceNumber = new HashMap<>();
-    private final Map<String, Result> clientResult = new HashMap<>();
+    private Map<Address, Integer> clientSequenceNumber = new HashMap<>();
+    private final Map<Address, Result> clientResult = new HashMap<>();
 
     @Override
     public AMOResult execute(Command command) {
@@ -51,8 +52,10 @@ public final class AMOApplication<T extends Application>
         //TODO: a deepcopy constructor
         //Hints: remember to deepcopy all fields, especially the mutable ones
 
-        this.clientSequenceNumber = new HashMap<>(amoApplication.clientSequenceNumber);
-        for (Map.Entry<String, Result> entry : amoApplication.clientResult.entrySet()) {
+        for (Map.Entry<Address,Integer> entry: amoApplication.clientSequenceNumber.entrySet()) {
+            this.clientSequenceNumber.put(entry.getKey(), entry.getValue());
+        }
+        for (Map.Entry<Address, Result> entry : amoApplication.clientResult.entrySet()) {
             this.clientResult.put(entry.getKey(), entry.getValue());
         }
     }

@@ -1,10 +1,14 @@
 package dslabs.primarybackup;
 
+import dslabs.atmostonce.AMOCommand;
+import dslabs.atmostonce.AMOResult;
 import dslabs.framework.Address;
 import dslabs.framework.Client;
 import dslabs.framework.Command;
 import dslabs.framework.Node;
 import dslabs.framework.Result;
+import dslabs.primarybackup.PBServer.InvalidView;
+import dslabs.primarybackup.PBServer.PBResult;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
 import lombok.extern.java.Log;
@@ -17,6 +21,11 @@ import static dslabs.primarybackup.ClientTimer.CLIENT_RETRY_MILLIS;
 @EqualsAndHashCode(callSuper = true)
 class PBClient extends Node implements Client {
     private final Address viewServer;
+    private View currentView;
+    private boolean gettingNewView;
+    private int sequenceNumber, retryCount;
+    private AMOCommand command;
+    private AMOResult result;
 
     //TODO: declare fields for your implementation ...
 
@@ -31,6 +40,11 @@ class PBClient extends Node implements Client {
     @Override
     public synchronized void init() {
         // TODO: initialize fields ...
+        sequenceNumber = 0;
+        gettingNewView = true;
+        send(new GetView(), viewServer);
+        currentView = new View(STARTUP_VIEWNUM, null, null);
+        set(new ClientTimer(null), CLIENT_RETRY_MILLIS);
     }
 
     /* -------------------------------------------------------------------------
@@ -39,18 +53,32 @@ class PBClient extends Node implements Client {
     @Override
     public synchronized void sendCommand(Command command) {
         //TODO: send command to server ...
+        sequenceNumber++;
+        AMOCommand c = new AMOCommand(command, sequenceNumber,
+                this.address());
+
+        this.command = c;
+        this.result = null;
+        if (currentView.primary() != null) {
+            retryCount = 0;
+            this.send(new Request(currentView,c), currentView.primary());
+            this.set(new ClientTimer(c), CLIENT_RETRY_MILLIS);
+        }
     }
 
     @Override
     public synchronized boolean hasResult() {
         //TODO: check whether there is result ...
-        return false;
+        return result != null;
     }
 
     @Override
     public synchronized Result getResult() throws InterruptedException {
         //TODO: wait to get result ...
-        return null;
+        while (result == null) {
+            wait();
+        }
+        return result.result();
     }
 
     /* -------------------------------------------------------------------------
@@ -58,12 +86,51 @@ class PBClient extends Node implements Client {
        -----------------------------------------------------------------------*/
     private synchronized void handleReply(Reply m, Address sender) {
         //TODO: check desired reply arrive ...
+        if (result == null && m.amoResult().sequenceNumber() == sequenceNumber) {
+            command = null;
+            result = m.amoResult();
+            notifyAll();
+            if (m.view().viewNum() > currentView.viewNum()) {
+                gettingNewView = true;
+                send(new GetView(), viewServer);
+                set(new ClientTimer(null), CLIENT_RETRY_MILLIS);
+            }
+        }
     }
-
+    
     private synchronized void handleViewReply(ViewReply m, Address sender) {
         //TODO: perform action when timer reach timeout ...
+        if (gettingNewView) {
+            if (m.view().viewNum() > currentView.viewNum()) {
+                currentView = m.view();
+                gettingNewView = false;
+                if (command != null && currentView.primary() != null) {
+                    retryCount = 0;
+                    send(new Request(currentView, command), currentView.primary());
+                    this.set(new ClientTimer(command),
+                            CLIENT_RETRY_MILLIS);
+                }
+            } else if (m.view().viewNum() == currentView.viewNum() && currentView.backup() != null) {
+                gettingNewView = false;
+                if (command != null) {
+                    send(new Request(currentView, command), currentView.backup());
+                    this.set(new ClientTimer(command),
+                            CLIENT_RETRY_MILLIS);
+                }
+            }
+        }
     }
 
+    private synchronized void handleInvalidReply(InvalidReply m, Address sender) {
+        PBResult result = m.result();
+        if (result instanceof InvalidView){
+            if (currentView.viewNum() < ((InvalidView) result).view().viewNum() && !gettingNewView) {
+                gettingNewView = true;
+                send(new GetView(), viewServer);
+                set(new ClientTimer(command), CLIENT_RETRY_MILLIS);
+            }
+        }
+    }
     // TODO: add utils here ...
 
     /* -------------------------------------------------------------------------
@@ -71,5 +138,28 @@ class PBClient extends Node implements Client {
        -----------------------------------------------------------------------*/
     private synchronized void onClientTimer(ClientTimer t) {
         // TODO: handle client request timeout ...
+        if (command != null && command.equals(t.command())&& !gettingNewView) {
+            if (retryCount > 9) {
+                send(new GetView(), viewServer);
+                this.set(t, CLIENT_RETRY_MILLIS);
+                gettingNewView = true;
+                retryCount = 0;
+            } else {
+                this.send(new Request(currentView, command), currentView.primary());
+                this.set(t, CLIENT_RETRY_MILLIS);
+                retryCount++;
+            }
+        }else if (gettingNewView) {
+            send(new GetView(), viewServer);
+            this.set(t, CLIENT_RETRY_MILLIS);
+        }
     }
+
+    /*private synchronized void onViewTimer(ViewTimer t) {
+        if (gettingNewView) {
+            send(new GetView(), viewServer);
+            set(t, VIEW_MILLIS);
+        }
+    }*/
+
 }
